@@ -171,22 +171,26 @@ func (p *Parser) parseLValue() (ast.Expr, error) {
 	return target, nil
 }
 
-// print expr, expr;   兼容 print(expr, expr); 与 print (1+2)*3;
+// print expr, expr;
+// 兼容三种写法：print a, b;  print(a, b);  print (1+2)*3;
+// 区分规则：若开头的左括号存在与之配对的右括号，且右括号后面紧跟 ; 或 ,，
+// 则视为函数调用风格的括号；否则括号只是普通的表达式分组。
 func (p *Parser) parsePrint() (ast.Stmt, error) {
 	printTok := p.next() // PRINT
-	callParen := p.match(token.LPAREN)
-	args := []ast.Expr{}
-	arg, err := p.parseExpr()
-	if err != nil {
-		return nil, err
+	callParen := p.looksLikeCallParen()
+	if callParen {
+		p.next() // 吃掉作为调用括号的 LPAREN
 	}
-	args = append(args, arg)
-	for p.match(token.COMMA) {
+	args := []ast.Expr{}
+	for {
 		arg, err := p.parseExpr()
 		if err != nil {
 			return nil, err
 		}
 		args = append(args, arg)
+		if !p.match(token.COMMA) {
+			break
+		}
 	}
 	if callParen {
 		if _, err := p.expect(token.RPAREN); err != nil {
@@ -197,6 +201,34 @@ func (p *Parser) parsePrint() (ast.Stmt, error) {
 		return nil, err
 	}
 	return &ast.Print{Args: args, L: printTok.Line}, nil
+}
+
+// looksLikeCallParen 判断当前位置的 LPAREN 是否为函数调用风格的括号。
+// 通过括号配平找到对应的 RPAREN，检查其后是否为语句结束或参数分隔。
+func (p *Parser) looksLikeCallParen() bool {
+	if !p.check(token.LPAREN) {
+		return false
+	}
+	depth := 0
+	for i := p.pos; i < len(p.tokens); i++ {
+		switch p.tokens[i].Type {
+		case token.LPAREN:
+			depth++
+		case token.RPAREN:
+			depth--
+			if depth == 0 {
+				if i+1 >= len(p.tokens) {
+					return false
+				}
+				switch p.tokens[i+1].Type {
+				case token.SEM, token.COMMA:
+					return true
+				}
+				return false
+			}
+		}
+	}
+	return false
 }
 
 func (p *Parser) parseBlock() (*ast.Block, error) {
@@ -292,13 +324,13 @@ func (p *Parser) parseLogicOr() (ast.Expr, error) {
 }
 
 func (p *Parser) parseLogicAnd() (ast.Expr, error) {
-	left, err := p.parseEquality()
+	left, err := p.parseBitOr()
 	if err != nil {
 		return nil, err
 	}
 	for p.check(token.ANDAND) {
 		op := p.next()
-		right, err := p.parseEquality()
+		right, err := p.parseBitOr()
 		if err != nil {
 			return nil, err
 		}
@@ -324,13 +356,13 @@ func (p *Parser) parseEquality() (ast.Expr, error) {
 }
 
 func (p *Parser) parseComparison() (ast.Expr, error) {
-	left, err := p.parseBitOr()
+	left, err := p.parseAdditive()
 	if err != nil {
 		return nil, err
 	}
 	for p.check(token.LT) || p.check(token.GT) || p.check(token.LE) || p.check(token.GE) {
 		op := p.next()
-		right, err := p.parseBitOr()
+		right, err := p.parseAdditive()
 		if err != nil {
 			return nil, err
 		}
@@ -356,13 +388,13 @@ func (p *Parser) parseBitOr() (ast.Expr, error) {
 }
 
 func (p *Parser) parseBitAnd() (ast.Expr, error) {
-	left, err := p.parseAdditive()
+	left, err := p.parseEquality()
 	if err != nil {
 		return nil, err
 	}
 	for p.check(token.AMP) {
 		op := p.next()
-		right, err := p.parseAdditive()
+		right, err := p.parseEquality()
 		if err != nil {
 			return nil, err
 		}

@@ -40,7 +40,10 @@ const (
 	sigContinue
 )
 
-type signalErr struct{ kind signalKind }
+type signalErr struct {
+	kind signalKind
+	line int
+}
 
 func (e signalErr) Error() string {
 	if e.kind == sigBreak {
@@ -106,7 +109,7 @@ func (in *Interp) Run(prog *ast.Program) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			if sig, ok := r.(signalErr); ok {
-				err = &RuntimeError{Msg: sig.Error()}
+				err = &RuntimeError{Line: sig.line, Msg: sig.Error()}
 				return
 			}
 			panic(r)
@@ -137,9 +140,9 @@ func (in *Interp) execStmt(s ast.Stmt, env *Env) error {
 	case *ast.While:
 		return in.execWhile(n, env)
 	case *ast.Break:
-		panic(signalErr{kind: sigBreak})
+		panic(signalErr{kind: sigBreak, line: n.L})
 	case *ast.Continue:
-		panic(signalErr{kind: sigContinue})
+		panic(signalErr{kind: sigContinue, line: n.L})
 	default:
 		return &RuntimeError{Line: s.Line(), Msg: "unknown statement"}
 	}
@@ -232,8 +235,13 @@ func checkAssignable(line int, dst, src value.Value) error {
 }
 
 func (in *Interp) assignIndex(idx *ast.IndexExpr, v value.Value, env *Env) error {
-	// Array 字段只允许是 Ident（解析期保证），这里直接定位
-	name := idx.Array.(*ast.Ident)
+	// 解析器允许 a[i][j] 形式的链式下标，而语言只有一维数组。
+	// 这里不能直接做类型断言，否则链式下标会 panic。
+	base, ok := idx.Array.(*ast.Ident)
+	if !ok {
+		return &RuntimeError{Line: idx.L, Msg: "multi-dimensional arrays are not supported"}
+	}
+	name := base
 	arr, ok := env.get(name.Name)
 	if !ok {
 		return &RuntimeError{Line: name.L, Msg: fmt.Sprintf("variable %q is not declared", name.Name)}

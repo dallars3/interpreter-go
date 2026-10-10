@@ -195,3 +195,33 @@ func TestSyntaxErrors(t *testing.T) {
 	mustFail(t, `a = ;`, "syntax error")
 	mustFail(t, `if (true) print(1);`, "syntax error") // 缺语句块
 }
+
+// TestFixChainIndexPanic 回归：链式下标赋值此前会触发 panic，
+// 现在应返回携带行号的干净运行时错误（读取路径同理）。
+func TestFixChainIndexPanic(t *testing.T) {
+	mustFail(t, `int a[3];
+a[1][2] = 5;`, "multi-dimensional arrays are not supported")
+	mustFail(t, `int a[3];
+print a[1][2];`, "non-array value")
+}
+
+// TestFixBreakLineNumber 回归：顶层 break/continue 的错误此前行号为 0。
+func TestFixBreakLineNumber(t *testing.T) {
+	mustFail(t, "break;\n", "line 1: runtime error: break outside loop")
+	mustFail(t, "\ncontinue;\n", "line 2: runtime error: continue outside loop")
+}
+
+// TestFixPrintGroupingParen 回归：print 后的括号可以仅作表达式分组。
+func TestFixPrintGroupingParen(t *testing.T) {
+	mustRun(t, `print (1+2)*3;`, "9\n")
+	mustRun(t, `print ((1+2)*3);`, "9\n") // 调用风格仍然可用
+	mustRun(t, `print(1, 2);`, "1 2\n")
+}
+
+// TestFixBitwisePrecedence 回归：位运算优先级对齐 C，
+// 即 & 紧于 |、二者均紧于关系/相等运算而松于算术运算。
+func TestFixBitwisePrecedence(t *testing.T) {
+	mustRun(t, `print 1 | 2 & 3;`, "3\n")  // 1 | (2 & 3)
+	mustRun(t, `print 6 & 3 | 8;`, "10\n") // (6 & 3) | 8
+	mustRun(t, `print 2 + 1 & 3;`, "3\n")  // (2 + 1) & 3
+}
