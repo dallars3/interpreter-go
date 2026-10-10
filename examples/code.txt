@@ -1,0 +1,83 @@
+// InterpreterDemo (Go 版) 示例程序
+// 支持：int/float/boolean/char/string、数组、算术/位/逻辑/比较运算、
+//       print 表达式、if-else、while、break、continue、注释。
+
+int a, b;
+a = 3;
+b = 2 + 3 * 4;          // 优先级：3*4 先算
+print(a, b);            // 3 14
+print((1 + 2) * (10 - 4)); // print 直接求值表达式：18（Java 原版会输出 12104）
+
+// 比较运算符（Java 原版识别但未实现，会 NPE）
+print(3 > 2);           // true
+print(2 == 2.0);        // true（int/float 可比较）
+print(10 / 3);          // 3（整数除法）
+print(10.0 / 4);        // 2.5
+
+// 布尔运算与一元运算
+boolean c;
+c = true && false;
+print(c);               // false
+c = !false || false;
+print(c);               // true
+print(~5);              // -6
+print(-a + 1);          // -2
+
+// 字符串
+string s;
+s = "hello" + " " + "world";
+print(s);               // hello world
+
+// 数组（Java 原版只有半成品声明，无法读写）
+int arr[5];
+arr[0] = 10;
+arr[1] = 20;
+arr[4] = arr[0] + arr[1];
+print(arr[4]);          // 30
+print(arr);             // [10, 20, 0, 0, 30]
+
+// if / else if / else，可嵌套
+int score;
+score = 75;
+if (score >= 90) {
+    print("A");
+} else if (score >= 60) {
+    print("B");         // B
+} else {
+    print("C");
+}
+
+// while + 嵌套 if + break/continue：求 1~10 偶数之和
+int sum, i;
+i = 1;
+while (i <= 10) {
+    if (i % 2 != 0) {
+        i = i + 1;
+        continue;
+    }
+    sum = sum + i;
+    i = i + 1;
+}
+print(sum);             // 30
+
+// 嵌套循环 + break：找 2~20 的第一个合数因子组合
+int x, y, found;
+found = 0;
+x = 2;
+while (x <= 6 && found == 0) {
+    y = 2;
+    while (y <= 6) {
+        if (x * y == 12) {
+            print(x, y);   // 2 6
+            found = 1;
+            break;         // 只跳出内层 while
+        }
+        y = y + 1;
+    }
+    x = x + 1;
+}
+
+// 字符类型
+char ch;
+ch = 'A';
+print(ch);              // A

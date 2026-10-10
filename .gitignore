@@ -1,0 +1,13 @@
+# 编译产物
+/bin/
+*.exe
+*.out
+
+# 本地测试缓存
+/.gocache/
+/.gopath/
+
+# 系统与编辑器文件
+.DS_Store
+.idea/
+.vscode/
