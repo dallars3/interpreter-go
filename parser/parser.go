@@ -74,7 +74,7 @@ func (p *Parser) parseStmt() (ast.Stmt, error) {
 	case token.TYPE:
 		return p.parseVarDecl()
 	case token.IDENT:
-		return p.parseAssign()
+		return p.parseIdentStmt()
 	case token.PRINT:
 		return p.parsePrint()
 	case token.IF:
@@ -98,6 +98,21 @@ func (p *Parser) parseStmt() (ast.Stmt, error) {
 	default:
 		return nil, p.errf(p.cur().Line, "unexpected token %s (%q)", p.cur().Type, p.cur().Lit)
 	}
+}
+
+// parseIdentStmt 区分以标识符开头的两种语句：
+// 独立函数调用（setHeader("a", "b");）与赋值（a = 1;、a[0] = 1;）。
+// 先试探能否在语句边界内解析成一次调用；不行就回退位置，按赋值解析。
+func (p *Parser) parseIdentStmt() (ast.Stmt, error) {
+	save := p.pos
+	if expr, err := p.parseExpr(); err == nil {
+		if call, ok := expr.(*ast.Call); ok && p.check(token.SEM) {
+			semi := p.next()
+			return &ast.ExprStmt{X: call, L: semi.Line}, nil
+		}
+	}
+	p.pos = save
+	return p.parseAssign()
 }
 
 // int a, b[10];
@@ -452,16 +467,46 @@ func (p *Parser) parsePostfix() (ast.Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	for p.match(token.LBRACK) {
-		idx, err := p.parseExpr()
-		if err != nil {
-			return nil, err
+	for {
+		if p.match(token.LBRACK) {
+			idx, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			rb, err := p.expect(token.RBRACK)
+			if err != nil {
+				return nil, err
+			}
+			expr = &ast.IndexExpr{Array: expr, Index: idx, L: rb.Line}
+			continue
 		}
-		rb, err := p.expect(token.RBRACK)
-		if err != nil {
-			return nil, err
+		if p.check(token.LPAREN) {
+			// 语言只有具名内置函数：f(1) 合法，(1)(2) 非法。
+			id, ok := expr.(*ast.Ident)
+			if !ok {
+				return nil, p.errf(p.cur().Line, "only named functions can be called")
+			}
+			lp := p.next() // 消费 LPAREN
+			args := []ast.Expr{}
+			if !p.check(token.RPAREN) {
+				for {
+					arg, err := p.parseExpr()
+					if err != nil {
+						return nil, err
+					}
+					args = append(args, arg)
+					if !p.match(token.COMMA) {
+						break
+					}
+				}
+			}
+			if _, err := p.expect(token.RPAREN); err != nil {
+				return nil, err
+			}
+			expr = &ast.Call{Name: id.Name, Args: args, L: lp.Line}
+			continue
 		}
-		expr = &ast.IndexExpr{Array: expr, Index: idx, L: rb.Line}
+		break
 	}
 	return expr, nil
 }

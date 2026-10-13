@@ -19,6 +19,7 @@ const (
 	Char
 	Str
 	Array
+	Void
 )
 
 // Value 是运行时值。零值即 Int 的 0。
@@ -40,6 +41,9 @@ func NewFloat(f float64) Value { return Value{Kind: Float, F: f} }
 func NewBool(b bool) Value     { return Value{Kind: Bool, B: b} }
 func NewChar(r string) Value   { return Value{Kind: Char, S: r} }
 func NewStr(s string) Value    { return Value{Kind: Str, S: s} }
+
+// NewVoid 是无返回值内置函数的返回类型；print 输出空串，不能赋给任何已声明变量。
+func NewVoid() Value { return Value{Kind: Void} }
 
 // NewArray 创建长度为 length、元素类型为 elemK、元素为零值的数组。
 func NewArray(elemK Kind, length int) Value {
@@ -79,6 +83,8 @@ func (v Value) KindName() string {
 		return "string"
 	case Array:
 		return TypeName(v.ElemK) + "[]"
+	case Void:
+		return "void"
 	default:
 		return "unknown"
 	}
@@ -127,6 +133,8 @@ func (v Value) String() string {
 		return strconv.FormatBool(v.B)
 	case Char, Str:
 		return v.S
+	case Void:
+		return ""
 	case Array:
 		out := "["
 		for i := range v.Elems {
