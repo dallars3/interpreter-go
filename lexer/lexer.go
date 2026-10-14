@@ -303,6 +303,30 @@ func (l *Lexer) readOperator(line int) (token.Token, error) {
 	}
 }
 
+// IsIdentifier 报告 word 是否为一个可作为普通标识符的词：非空、首字符为
+// 字母或下划线、其余为字母/数字/下划线，且不是语言关键字（print/if/int 等）。
+// 宿主用它校验内置函数名——只有普通标识符才能在脚本里写成 name(...)。
+func IsIdentifier(word string) bool {
+	if word == "" {
+		return false
+	}
+	for i, ch := range word {
+		if i == 0 {
+			if !isIdentStart(ch) {
+				return false
+			}
+			continue
+		}
+		if !isIdentPart(ch) {
+			return false
+		}
+	}
+	if _, isKeyword := keywords[word]; isKeyword {
+		return false
+	}
+	return true
+}
+
 func isIdentStart(ch rune) bool {
 	return ch == '_' || unicode.IsLetter(ch)
 }

@@ -152,3 +152,69 @@ while (true) { i = i + 1; }`
 		t.Fatalf("want deadline-exceeded runtime error, got %v", err)
 	}
 }
+
+// 保留字（print/if/int 等）永远不会被词法器识别为 IDENT，注册这类名字
+// 的内置函数不可达，必须在注册期大声失败而不是静默成功。
+func TestRegisterBuiltinRejectsReservedNames(t *testing.T) {
+	for _, name := range []string{"print", "if", "while", "true", "int", "string"} {
+		in := New(io.Discard)
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("RegisterBuiltin(%q) must panic", name)
+				}
+			}()
+			in.RegisterBuiltin(name, func([]value.Value) (value.Value, error) {
+				t.Fatalf("builtin %q must never be reachable", name)
+				return value.NewVoid(), nil
+			})
+		}()
+	}
+}
+
+// 非法标识符名（空串、含运算符、多个 token）同样拒绝。
+func TestRegisterBuiltinRejectsInvalidNames(t *testing.T) {
+	for _, name := range []string{"", "a-b", "x y", "1abc"} {
+		in := New(io.Discard)
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("RegisterBuiltin(%q) must panic", name)
+				}
+			}()
+			in.RegisterBuiltin(name, func([]value.Value) (value.Value, error) {
+				return value.NewVoid(), nil
+			})
+		}()
+	}
+}
+
+// Void 不能借字符串拼接伪装成 string：拼接分支必须拒绝 Void 操作数，
+// 无论是直接 print 还是赋给已声明的 string 变量。
+func TestVoidDoesNotLeakThroughConcatenation(t *testing.T) {
+	reg := func(in *Interp) {
+		in.RegisterBuiltin("noop", func([]value.Value) (value.Value, error) {
+			return value.NewVoid(), nil
+		})
+	}
+	if _, err := runWith(t, `print("a" + noop());`, nil, reg); err == nil {
+		t.Fatal(`"a" + noop() must be a runtime error`)
+	}
+	if _, err := runWith(t, `print(noop() + "a");`, nil, reg); err == nil {
+		t.Fatal(`noop() + "a" must be a runtime error`)
+	}
+	if _, err := runWith(t, `
+string s;
+s = "a" + noop();
+print(s);`, nil, reg); err == nil {
+		t.Fatal("assigning a void concatenation to a string must fail")
+	}
+	// print 直接打印 void 仍然输出空串（不经拼接），该行为保留。
+	out, err := runWith(t, `print("done:", noop());`, nil, reg)
+	if err != nil {
+		t.Fatalf("printing a void argument is allowed, got %v", err)
+	}
+	if out != "done: \n" {
+		t.Fatalf("output = %q, want %q", out, "done: \n")
+	}
+}

@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"interpreter/ast"
+	"interpreter/lexer"
 	"interpreter/token"
 	"interpreter/value"
 )
@@ -115,6 +116,11 @@ func New(out io.Writer) *Interp {
 // 注册是编程期配置：重复注册同名函数或传入 nil 一律 panic，
 // 与 registry "重复部署大声失败" 的风格保持一致。
 func (in *Interp) RegisterBuiltin(name string, fn BuiltinFunc) {
+	// 只有普通标识符能被词法器识别为 IDENT 并解析成调用；关键字（print/if/int
+	// 等）或非法名字即使注册了也永远不可达，必须在编程期大声失败。
+	if !lexer.IsIdentifier(name) {
+		panic("interp: builtin name " + fmt.Sprintf("%q", name) + " is not a callable identifier")
+	}
 	if fn == nil {
 		panic("interp: builtin " + name + " must not be nil")
 	}
@@ -580,8 +586,12 @@ func (in *Interp) evalBinary(b *ast.Binary, env *Env) (value.Value, error) {
 		return value.NewBool(res), nil
 	}
 
-	// 字符串拼接
+	// 字符串拼接：Void 没有可打印值，不允许借拼接伪装成 string
+	// （否则会绕过对已声明变量的严格赋值检查）。
 	if b.Op == token.PLUS && (left.Kind == value.Str || right.Kind == value.Str) {
+		if left.Kind == value.Void || right.Kind == value.Void {
+			return value.Value{}, &RuntimeError{Line: b.L, Msg: "cannot concatenate void with string"}
+		}
 		return value.NewStr(left.String() + right.String()), nil
 	}
 
