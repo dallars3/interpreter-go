@@ -11,6 +11,7 @@
 package interp
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"math"
@@ -18,6 +19,7 @@ import (
 	"strings"
 
 	"interpreter/ast"
+	"interpreter/lexer"
 	"interpreter/token"
 	"interpreter/value"
 )
@@ -90,21 +92,56 @@ func (e *Env) set(name string, v value.Value) bool {
 	return false
 }
 
-// Interp 解释器状态。
+// BuiltinFunc 是宿主程序注册给脚本调用的内置函数。参数按调用顺序求值后传入；
+// 返回普通 error 会被包装成携带调用行号的 RuntimeError，返回 *RuntimeError
+// 则原样透传。无返回值的函数返回 value.NewVoid()。
+type BuiltinFunc func(args []value.Value) (value.Value, error)
+
+// Interp 解释器状态。每个 Interp 只应服务一次执行：脚本之间不共享变量。
 type Interp struct {
-	rootEnv *Env
-	out     io.Writer
+	rootEnv  *Env
+	out      io.Writer
+	ctx      context.Context
+	builtins map[string]BuiltinFunc
 }
 
 func New(out io.Writer) *Interp {
 	if out == nil {
 		out = os.Stdout
 	}
-	return &Interp{rootEnv: NewEnv(nil), out: out}
+	return &Interp{rootEnv: NewEnv(nil), out: out, ctx: context.Background(), builtins: map[string]BuiltinFunc{}}
+}
+
+// RegisterBuiltin 注册一个脚本可按 name(...) 调用的宿主函数。
+// 注册是编程期配置：重复注册同名函数或传入 nil 一律 panic，
+// 与 registry "重复部署大声失败" 的风格保持一致。
+func (in *Interp) RegisterBuiltin(name string, fn BuiltinFunc) {
+	// 只有普通标识符能被词法器识别为 IDENT 并解析成调用；关键字（print/if/int
+	// 等）或非法名字即使注册了也永远不可达，必须在编程期大声失败。
+	if !lexer.IsIdentifier(name) {
+		panic("interp: builtin name " + fmt.Sprintf("%q", name) + " is not a callable identifier")
+	}
+	if fn == nil {
+		panic("interp: builtin " + name + " must not be nil")
+	}
+	if _, exists := in.builtins[name]; exists {
+		panic("interp: builtin " + name + " already registered")
+	}
+	in.builtins[name] = fn
 }
 
 // Run 执行整个程序。
-func (in *Interp) Run(prog *ast.Program) (err error) {
+func (in *Interp) Run(prog *ast.Program) error {
+	return in.RunContext(context.Background(), prog)
+}
+
+// RunContext 在 ctx 下执行整个程序：ctx 取消（或超时）后，循环在最近的
+// 迭代边界停止并返回 RuntimeError，用于杀掉死循环脚本。
+func (in *Interp) RunContext(ctx context.Context, prog *ast.Program) (err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	in.ctx = ctx
 	// 捕获逃逸出所有 while 的 break/continue，转为错误
 	defer func() {
 		if r := recover(); r != nil {
@@ -116,9 +153,20 @@ func (in *Interp) Run(prog *ast.Program) (err error) {
 		}
 	}()
 	for _, stmt := range prog.Stmts {
+		if err = in.cancelled(stmt.Line()); err != nil {
+			return err
+		}
 		if err = in.execStmt(stmt, in.rootEnv); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// cancelled 在 ctx 已结束时返回携带行号的 RuntimeError。
+func (in *Interp) cancelled(line int) error {
+	if in.ctx != nil && in.ctx.Err() != nil {
+		return &RuntimeError{Line: line, Msg: "execution cancelled: " + in.ctx.Err().Error()}
 	}
 	return nil
 }
@@ -133,6 +181,9 @@ func (in *Interp) execStmt(s ast.Stmt, env *Env) error {
 		return in.execAssign(n, env)
 	case *ast.Print:
 		return in.execPrint(n, env)
+	case *ast.ExprStmt:
+		_, err := in.eval(n.X, env)
+		return err
 	case *ast.Block:
 		return in.execBlock(n, env)
 	case *ast.If:
@@ -315,6 +366,9 @@ func (in *Interp) execIf(f *ast.If, env *Env) error {
 
 func (in *Interp) execWhile(w *ast.While, env *Env) error {
 	for {
+		if err := in.cancelled(w.L); err != nil {
+			return err
+		}
 		cond, err := in.eval(w.Cond, env)
 		if err != nil {
 			return err
@@ -373,6 +427,8 @@ func (in *Interp) eval(e ast.Expr, env *Env) (value.Value, error) {
 		return v, nil
 	case *ast.IndexExpr:
 		return in.evalIndex(n, env)
+	case *ast.Call:
+		return in.evalCall(n, env)
 	case *ast.Unary:
 		return in.evalUnary(n, env)
 	case *ast.Binary:
@@ -380,6 +436,31 @@ func (in *Interp) eval(e ast.Expr, env *Env) (value.Value, error) {
 	default:
 		return value.Value{}, &RuntimeError{Line: e.Line(), Msg: "unknown expression"}
 	}
+}
+
+// evalCall 求值内置函数调用：实参按顺序求值，未知函数或宿主报错都成为
+// 携带调用行号的运行时错误。
+func (in *Interp) evalCall(c *ast.Call, env *Env) (value.Value, error) {
+	fn, ok := in.builtins[c.Name]
+	if !ok {
+		return value.Value{}, &RuntimeError{Line: c.L, Msg: fmt.Sprintf("unknown function %q", c.Name)}
+	}
+	args := make([]value.Value, len(c.Args))
+	for i, ae := range c.Args {
+		v, err := in.eval(ae, env)
+		if err != nil {
+			return value.Value{}, err
+		}
+		args[i] = v
+	}
+	res, err := fn(args)
+	if err != nil {
+		if _, ok := err.(*RuntimeError); ok {
+			return value.Value{}, err
+		}
+		return value.Value{}, &RuntimeError{Line: c.L, Msg: err.Error()}
+	}
+	return res, nil
 }
 
 func (in *Interp) evalIndex(n *ast.IndexExpr, env *Env) (value.Value, error) {
@@ -505,8 +586,12 @@ func (in *Interp) evalBinary(b *ast.Binary, env *Env) (value.Value, error) {
 		return value.NewBool(res), nil
 	}
 
-	// 字符串拼接
+	// 字符串拼接：Void 没有可打印值，不允许借拼接伪装成 string
+	// （否则会绕过对已声明变量的严格赋值检查）。
 	if b.Op == token.PLUS && (left.Kind == value.Str || right.Kind == value.Str) {
+		if left.Kind == value.Void || right.Kind == value.Void {
+			return value.Value{}, &RuntimeError{Line: b.L, Msg: "cannot concatenate void with string"}
+		}
 		return value.NewStr(left.String() + right.String()), nil
 	}
 

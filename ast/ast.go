@@ -84,6 +84,22 @@ type IndexExpr struct {
 	L     int
 }
 
+// Call 函数调用表达式：name(arg1, arg2)。
+// 语言不支持用户自定义函数，被调用的只能是宿主注册的内置函数，
+// 因此被调用方直接存名字，不需要通用的"函数值"表达式。
+type Call struct {
+	Name string
+	Args []Expr
+	L    int
+}
+
+// ExprStmt 是表达式语句，目前只可能是一次被丢弃返回值的函数调用，
+// 例如 setHeader("Content-Type", "text/html");
+type ExprStmt struct {
+	X Expr
+	L int
+}
+
 // ---------- 语句 ----------
 
 // DeclItem 一条声明中的单个变量：a 或 a[10]
@@ -146,10 +162,12 @@ func (n *StringLit) Line() int {
 func (n *CharLit) Line() int { return n.L }
 func (n *Unary) Line() int   { return n.L }
 func (n *Binary) Line() int  { return n.L }
+func (n *Call) Line() int    { return n.L }
 func (n *IndexExpr) Line() int {
 	return n.L
 }
 
+func (s *ExprStmt) Line() int { return s.L }
 func (s *VarDecl) Line() int  { return s.L }
 func (s *Assign) Line() int   { return s.L }
 func (s *Print) Line() int    { return s.L }
@@ -167,8 +185,10 @@ func (*StringLit) exprNode() {}
 func (*CharLit) exprNode()   {}
 func (*Unary) exprNode()     {}
 func (*Binary) exprNode()    {}
+func (*Call) exprNode()      {}
 func (*IndexExpr) exprNode() {}
 
+func (*ExprStmt) stmtNode() {}
 func (*VarDecl) stmtNode()  {}
 func (*Assign) stmtNode()   {}
 func (*Print) stmtNode()    {}
